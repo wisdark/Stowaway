@@ -37,6 +37,9 @@ type AgentOptions struct {
 	ReuseHost   string
 	ReusePort   string
 	RhostReuse  bool
+	Proxy 	    string
+	ProxyU 		string
+	ProxyP		string
 }
 
 /*-------------------------Admin相关状态变量代码--------------------------*/
@@ -56,7 +59,8 @@ type AdminStatus struct {
 	AESKey           []byte
 }
 
-func (nas *AdminStatus) NewAdminStatus() {
+func NewAdminStatus() *AdminStatus {
+	nas := new(AdminStatus)
 	nas.ReadyChange = make(chan bool, 1)
 	nas.IsShellMode = make(chan bool, 1)
 	nas.SSHSuccess = make(chan bool, 1)
@@ -64,8 +68,9 @@ func (nas *AdminStatus) NewAdminStatus() {
 	nas.GetName = make(chan bool, 1)
 	nas.ShellSuccess = make(chan bool, 1)
 	nas.NodesReadyToadd = make(chan map[string]string)
-	nas.StartNode = "0.0.0.0"
+	nas.StartNode = "offline"
 	nas.HandleNode = AdminId
+	return nas
 }
 
 /*-------------------------Admin结构体变量代码--------------------------*/
@@ -81,9 +86,11 @@ type AdminStuff struct {
 	ForwardStatus          *ForwardStatus
 	ReflectConnMap         *Uint32ConnMap
 	PortReflectMap         *Uint32ChanStrMap
+	Socks5UDPAssociate     *UDPAssociate
 }
 
-func (nas *AdminStuff) NewAdminStuff() {
+func NewAdminStuff() *AdminStuff {
+	nas := new(AdminStuff)
 	nas.SocksNum = NewSafeUint32()
 	nas.ReflectNum = NewSafeUint32()
 	nas.SocksListenerForClient = NewStrListenerSliceMap()
@@ -94,6 +101,8 @@ func (nas *AdminStuff) NewAdminStuff() {
 	nas.PortReflectMap = NewUint32ChanStrMap()
 	nas.NodeStatus = NewNodeStatus()
 	nas.ForwardStatus = NewForwardStatus()
+	nas.Socks5UDPAssociate = NewSocks5UDPAssociate()
+	return nas
 }
 
 /*-------------------------Agent相关状态变量代码--------------------------*/
@@ -108,29 +117,33 @@ type AgentStatus struct {
 	AESKey            []byte
 }
 
-func (nas *AgentStatus) NewAgentStatus() {
+func NewAgentStatus() *AgentStatus {
+	nas := new(AgentStatus)
 	nas.ReConnCome = make(chan bool, 1)
 	nas.WaitForIDAllocate = make(chan string, 1)
 	nas.Nodeid = StartNodeId
 	nas.NodeNote = ""
 	nas.NotLastOne = false
 	nas.Waiting = false
+	return nas
 }
 
 /*-------------------------Agent结构体变量代码--------------------------*/
 
 type AgentStuff struct {
-	ProxyChan         *ProxyChan
-	SocksInfo         *SocksSetting
-	SocksDataChanMap  *Uint32ChanStrMap
-	PortFowardMap     *Uint32ChanStrMap
-	ForwardConnMap    *Uint32ConnMap
-	ReflectConnMap    *Uint32ConnMap
-	ReflectStatus     *ReflectStatus
-	CurrentSocks5Conn *Uint32ConnMap
+	ProxyChan          *ProxyChan
+	SocksInfo          *SocksSetting
+	SocksDataChanMap   *Uint32ChanStrMap
+	PortFowardMap      *Uint32ChanStrMap
+	ForwardConnMap     *Uint32ConnMap
+	ReflectConnMap     *Uint32ConnMap
+	ReflectStatus      *ReflectStatus
+	CurrentSocks5Conn  *Uint32ConnMap
+	Socks5UDPAssociate *UDPAssociate
 }
 
-func (nas *AgentStuff) NewAgentStuff() {
+func NewAgentStuff() *AgentStuff {
+	nas := new(AgentStuff)
 	nas.SocksInfo = NewSocksSetting()
 	nas.ProxyChan = NewProxyChan()
 	nas.SocksDataChanMap = NewUint32ChanStrMap()
@@ -139,6 +152,8 @@ func (nas *AgentStuff) NewAgentStuff() {
 	nas.ReflectStatus = NewReflectStatus()
 	nas.ReflectConnMap = NewUint32ConnMap()
 	nas.CurrentSocks5Conn = NewUint32ConnMap()
+	nas.Socks5UDPAssociate = NewSocks5UDPAssociate()
+	return nas
 }
 
 /*-------------------------Node状态代码--------------------------*/
@@ -199,19 +214,6 @@ func NewNodeStuff() *NodeStuff {
 	return nns
 }
 
-/*-------------------------Node上下级信息代码--------------------------*/
-
-type Node struct {
-	Uppernode string
-	Lowernode []string
-}
-
-func NewNode() *Node {
-	nn := new(Node)
-	nn.Lowernode = make([]string, 0)
-	return nn
-}
-
 /*-------------------------传递给下级节点结构代码--------------------------*/
 
 type PassToLowerNodeData struct {
@@ -266,6 +268,47 @@ func NewSocksSetting() *SocksSetting {
 	return nss
 }
 
+type UDPAssociate struct {
+	sync.RWMutex
+	Info map[uint32]*UDPAssociateInfo
+}
+
+func NewSocks5UDPAssociate() *UDPAssociate {
+	ua := new(UDPAssociate)
+	ua.Info = make(map[uint32]*UDPAssociateInfo)
+	return ua
+}
+
+type UDPAssociateInfo struct {
+	SourceAddr string
+	Accepter   *net.UDPAddr
+	Listener   *net.UDPConn
+	Pair       map[string][]byte
+	Ready      chan string
+	UDPData    chan string
+}
+
+func NewUDPAssociateInfo() *UDPAssociateInfo {
+	ua := new(UDPAssociateInfo)
+	ua.Pair = make(map[string][]byte)
+	ua.Ready = make(chan string)
+	ua.UDPData = make(chan string, 1)
+	return ua
+}
+
+type SocksLocalAddr struct {
+	Host string
+	Port int
+}
+
+func (addr *SocksLocalAddr) ByteArray() []byte {
+	bytes := make([]byte, 6)
+	copy(bytes[:4], net.ParseIP(addr.Host).To4())
+	bytes[4] = byte(addr.Port >> 8)
+	bytes[5] = byte(addr.Port % 256)
+	return bytes
+}
+
 /*-------------------------File upload/download配置相关代码--------------------------*/
 
 type FileStatus struct {
@@ -317,11 +360,6 @@ type Uint32ConnMap struct {
 type Uint32StrMap struct {
 	sync.RWMutex
 	Payload map[uint32]string
-}
-
-type SafeNodeMap struct {
-	sync.RWMutex
-	AllNode map[string]*Node
 }
 
 type SafeRouteMap struct {
@@ -382,12 +420,6 @@ func NewStrUint32SliceMap() *StrUint32SliceMap {
 	return nuusm
 }
 
-func NewSafeNodeMap() *SafeNodeMap {
-	nsnm := new(SafeNodeMap)
-	nsnm.AllNode = make(map[string]*Node)
-	return nsnm
-}
-
 func NewSafeRouteMap() *SafeRouteMap {
 	nsrm := new(SafeRouteMap)
 	nsrm.Route = make(map[string]string)
@@ -412,7 +444,7 @@ func IsClosed(ch chan string) bool {
 	return false
 }
 
-/*-------------------------操作系统判断相关代码--------------------------*/
+/*-------------------------操作系统&IP类型判断相关代码--------------------------*/
 
 // CheckSystem 检查所在的操作系统
 func CheckSystem() (sysType uint32) {
@@ -426,6 +458,18 @@ func CheckSystem() (sysType uint32) {
 	return
 }
 
+// CheckIfIP4 检查是否是ipv4地址 
+func CheckIfIP4(ip string) bool{
+	for i := 0; i < len(ip); i++ {
+		switch ip[i] {
+		case '.':
+			return true
+		case ':':
+			return false
+		}
+	}
+	return false
+}
 /*-------------------------根据操作系统返回系统信息相关代码--------------------------*/
 
 // GetInfoViaSystem 获得系统信息

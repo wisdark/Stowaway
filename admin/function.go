@@ -17,8 +17,7 @@ import (
 var AdminStuff *utils.AdminStuff
 
 func init() {
-	AdminStuff = new(utils.AdminStuff)
-	AdminStuff.NewAdminStuff()
+	AdminStuff = utils.NewAdminStuff()
 }
 
 //admin端功能及零碎代码
@@ -30,8 +29,6 @@ func init() {
 
 // StartSocksServiceForClient 启动socks5 for client
 func StartSocksServiceForClient(command []string, startNodeConn net.Conn, nodeid string) {
-	route := utils.GetInfoViaLockMap(Route, nodeid).(string)
-
 	socksPort := command[1]
 	checkPort, _ := strconv.Atoi(socksPort)
 	if checkPort <= 0 || checkPort > 65535 {
@@ -42,10 +39,6 @@ func StartSocksServiceForClient(command []string, startNodeConn net.Conn, nodeid
 	socks5Addr := fmt.Sprintf("0.0.0.0:%s", socksPort)
 	socksListenerForClient, err := net.Listen("tcp", socks5Addr)
 	if err != nil {
-		err = utils.ConstructPayloadAndSend(startNodeConn, nodeid, route, "COMMAND", "SOCKSOFF", " ", " ", 0, utils.AdminId, AdminStatus.AESKey, false)
-		if err != nil {
-			log.Println("[*]Cannot stop agent's socks service,check the connection!")
-		}
 		log.Println("[*]Cannot listen this port!")
 		return
 	}
@@ -79,20 +72,79 @@ func StartSocksServiceForClient(command []string, startNodeConn net.Conn, nodeid
 	}
 }
 
-// HandleNewSocksConn 处理每一个单个的socks socket
+// HandleNewSocksConn 处理每一个单个的socks TCPsocket
 func HandleNewSocksConn(startNodeConn net.Conn, clientSocks net.Conn, num uint32, nodeid string) {
 	route := utils.GetInfoViaLockMap(Route, nodeid).(string)
 
 	buffer := make([]byte, 20480)
 
+	defer func() {
+		clientSocks.Close()
+		utils.ConstructPayloadAndSend(startNodeConn, nodeid, route, "COMMAND", "FIN", " ", " ", num, utils.AdminId, AdminStatus.AESKey, false)
+		AdminStuff.Socks5UDPAssociate.Lock()
+		if _, ok := AdminStuff.Socks5UDPAssociate.Info[num]; ok {
+			AdminStuff.Socks5UDPAssociate.Info[num].Listener.Close()
+		}
+		AdminStuff.Socks5UDPAssociate.Unlock()
+	}()
+
 	for {
 		len, err := clientSocks.Read(buffer)
 		if err != nil {
-			clientSocks.Close()
-			utils.ConstructPayloadAndSend(startNodeConn, nodeid, route, "COMMAND", "FIN", " ", " ", num, utils.AdminId, AdminStatus.AESKey, false)
 			return
 		}
-		utils.ConstructPayloadAndSend(startNodeConn, nodeid, route, "DATA", "SOCKSDATA", " ", string(buffer[:len]), num, utils.AdminId, AdminStatus.AESKey, false)
+		utils.ConstructPayloadAndSend(startNodeConn, nodeid, route, "DATA", "TCPSOCKSDATA", " ", string(buffer[:len]), num, utils.AdminId, AdminStatus.AESKey, false)
+	}
+}
+
+// StartUDPAssociate 处理agent返回的UDPAssociate启动请求
+func StartUDPAssociate(id uint32) (*net.UDPConn, string, bool) {
+	AdminStuff.ClientSockets.Lock()
+	localAddr := AdminStuff.ClientSockets.Payload[id].LocalAddr().(*net.TCPAddr).IP.String()
+	AdminStuff.ClientSockets.Unlock()
+
+	udpListenerAddr, err := net.ResolveUDPAddr("udp", localAddr+":0")
+	if err != nil {
+		return nil, "", false
+	}
+
+	udpListener, err := net.ListenUDP("udp", udpListenerAddr)
+	if err != nil {
+		return nil, "", false
+	}
+
+	return udpListener, udpListener.LocalAddr().String(), true
+}
+
+// HandleUDPAssociateListener 处理每一个udp的listener
+func HandleUDPAssociateListener(startNodeConn net.Conn, udpListener *net.UDPConn, nodeid string, id uint32) {
+	route := utils.GetInfoViaLockMap(Route, nodeid).(string)
+
+	newUDPInfo := utils.NewUDPAssociateInfo()
+	newUDPInfo.Listener = udpListener
+	AdminStuff.Socks5UDPAssociate.Lock()
+	AdminStuff.Socks5UDPAssociate.Info[id] = newUDPInfo
+	AdminStuff.Socks5UDPAssociate.Unlock()
+
+	buffer := make([]byte, 20480)
+
+	var alreadyGetAddr bool
+	for {
+		len, addr, err := udpListener.ReadFromUDP(buffer)
+		if !alreadyGetAddr {
+			AdminStuff.Socks5UDPAssociate.Lock()
+			AdminStuff.Socks5UDPAssociate.Info[id].Accepter = addr
+			AdminStuff.Socks5UDPAssociate.Unlock()
+			alreadyGetAddr = true
+		}
+
+		if err != nil {
+			udpListener.Close()
+			utils.ConstructPayloadAndSend(startNodeConn, nodeid, route, "COMMAND", "UDPFIN", " ", " ", id, utils.AdminId, AdminStatus.AESKey, false)
+			return
+		}
+
+		utils.ConstructPayloadAndSend(startNodeConn, nodeid, route, "DATA", "UDPSOCKSDATA", " ", string(buffer[:len]), id, utils.AdminId, AdminStatus.AESKey, false)
 	}
 }
 
@@ -241,7 +293,6 @@ func StopForward() {
 		}
 
 		log.Println("[*]All forward sockets are closed successfully!")
-
 	}
 }
 
@@ -354,8 +405,8 @@ func CheckInput(input string) string {
 /*-------------------------控制相关代码--------------------------*/
 
 // CloseAll 当有一个节点下线，强制关闭该节点及其子节点对应的服务
-func CloseAll(id string) {
-	readyToDel := FindAll(id)
+func CloseAll(topology *Topology, id string) {
+	readyToDel := topology.FindAll(id)
 
 	AdminStuff.SocksListenerForClient.Lock()
 

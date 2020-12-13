@@ -3,7 +3,6 @@ package agent
 import (
 	"log"
 	"net"
-	"os"
 
 	"Stowaway/node"
 	"Stowaway/share"
@@ -15,10 +14,8 @@ var AgentStatus *utils.AgentStatus
 var ConnToAdmin net.Conn
 
 func init() {
-	AgentStatus = new(utils.AgentStatus)
-	AgentStuff = new(utils.AgentStuff)
-	AgentStatus.NewAgentStatus()
-	AgentStuff.NewAgentStuff()
+	AgentStatus = utils.NewAgentStatus()
+	AgentStuff = utils.NewAgentStuff()
 }
 
 // NewAgent 启动agent
@@ -33,30 +30,33 @@ func NewAgent(c *utils.AgentOptions) {
 	reuseHost := c.ReuseHost
 	reusePort := c.ReusePort
 	rhostReuse := c.RhostReuse
+	proxy := c.Proxy
+	proxyU := c.ProxyU
+	proxyP := c.ProxyP
 	//设置通信字符串
 	node.SetValidtMessage(AgentStatus.AESKey)
 	node.SetForwardMessage(AgentStatus.AESKey)
 	//根据选择确定启动方式
 	if isStartNode && passive == false && reuseHost == "" && reusePort == "" {
 		go WaitForExit()
-		StartNodeInit(monitor, listenPort, reconn, passive)
+		StartNodeInit(monitor, listenPort, reconn,proxy, proxyU, proxyP, passive)
 	} else if passive == false && reuseHost == "" && reusePort == "" {
 		go WaitForExit()
-		SimpleNodeInit(monitor, listenPort, rhostReuse)
+		SimpleNodeInit(monitor, listenPort, proxy, proxyU, proxyP, rhostReuse)
 	} else if isStartNode && passive && reuseHost == "" && reusePort == "" {
 		go WaitForExit()
-		StartNodeReversemodeInit(monitor, listenPort, passive)
+		StartNodeReversemodeInit(monitor, listenPort, proxy, proxyU, proxyP,passive)
 	} else if passive && reuseHost == "" && reusePort == "" {
 		go WaitForExit()
 		SimpleNodeReversemodeInit(monitor, listenPort)
 	} else if reuseHost != "" && reusePort != "" && isStartNode {
 		go WaitForExit()
-		StartNodeReuseInit(reuseHost, reusePort, listenPort, 1)
+		StartNodeReuseInit(reuseHost, reusePort, listenPort, proxy, proxyU, proxyP, 1)
 	} else if reuseHost != "" && reusePort != "" {
 		go WaitForExit()
 		SimpleNodeReuseInit(reuseHost, reusePort, listenPort, 1)
 	} else if reusePort != "" && listenPort != "" && isStartNode {
-		StartNodeReuseInit(reuseHost, reusePort, listenPort, 2)
+		StartNodeReuseInit(reuseHost, reusePort, listenPort, proxy, proxyU, proxyP,2)
 	} else if reusePort != "" && listenPort != "" {
 		SimpleNodeReuseInit(reuseHost, reusePort, listenPort, 2)
 	}
@@ -65,18 +65,18 @@ func NewAgent(c *utils.AgentOptions) {
 // 初始化代码开始
 
 // StartNodeInit 后续想让startnode与simplenode实现不一样的功能，故将两种node实现代码分开写
-func StartNodeInit(monitor, listenPort, reConn string, passive bool) {
+func StartNodeInit(monitor, listenPort, reConn, proxy, proxyU, proxyP string, passive bool) {
 	var err error
 	AgentStatus.Nodeid = utils.StartNodeId
 
-	ConnToAdmin, AgentStatus.Nodeid, err = node.StartNodeConn(monitor, listenPort, AgentStatus.Nodeid, AgentStatus.AESKey)
+	ConnToAdmin, AgentStatus.Nodeid, err = node.StartNodeConn(monitor, listenPort, AgentStatus.Nodeid, proxy, proxyU, proxyP,AgentStatus.AESKey)
 	if err != nil {
-		os.Exit(0)
+		log.Fatalf("[*]Error occured: %s\n", err)
 	}
 
 	go SendInfo(AgentStatus.Nodeid) //发送自身信息
 	go share.SendHeartBeatControl(&ConnToAdmin, AgentStatus.Nodeid, AgentStatus.AESKey)
-	go HandleStartNodeConn(&ConnToAdmin, monitor, listenPort, reConn, passive, AgentStatus.Nodeid)
+	go HandleStartNodeConn(&ConnToAdmin, monitor, listenPort, reConn, passive, AgentStatus.Nodeid, proxy, proxyU, proxyP)
 	go node.StartNodeListen(listenPort, AgentStatus.Nodeid, AgentStatus.AESKey)
 	go PrepareForReOnlineNode()
 
@@ -98,17 +98,17 @@ func StartNodeInit(monitor, listenPort, reConn string, passive bool) {
 }
 
 // SimpleNodeInit 普通的node节点
-func SimpleNodeInit(monitor, listenPort string, rhostReuse bool) {
+func SimpleNodeInit(monitor, listenPort, proxy, proxyU, proxyP string, rhostReuse bool) {
 	var err error
 	AgentStatus.Nodeid = utils.AdminId
 
 	if !rhostReuse { //连接的节点是否是在reuseport？
-		ConnToAdmin, AgentStatus.Nodeid, err = node.StartNodeConn(monitor, listenPort, AgentStatus.Nodeid, AgentStatus.AESKey)
+		ConnToAdmin, AgentStatus.Nodeid, err = node.StartNodeConn(monitor, listenPort, AgentStatus.Nodeid, proxy, proxyU, proxyP, AgentStatus.AESKey)
 	} else {
-		ConnToAdmin, AgentStatus.Nodeid, err = node.StartNodeConnReuse(monitor, listenPort, AgentStatus.Nodeid, AgentStatus.AESKey)
+		ConnToAdmin, AgentStatus.Nodeid, err = node.StartNodeConnReuse(monitor, listenPort, AgentStatus.Nodeid, proxy, proxyU, proxyP,AgentStatus.AESKey)
 	}
 	if err != nil {
-		os.Exit(0)
+		log.Fatalf("[*]Error occured: %s\n", err)
 	}
 	//与上级连接建立成功后的代码
 	go SendInfo(AgentStatus.Nodeid)
@@ -135,14 +135,14 @@ func SimpleNodeInit(monitor, listenPort string, rhostReuse bool) {
 }
 
 // StartNodeReversemodeInit reverse mode下的startnode节点
-func StartNodeReversemodeInit(monitor, listenPort string, passive bool) {
+func StartNodeReversemodeInit(monitor, listenPort, proxy, proxyU, proxyP string, passive bool) {
 	AgentStatus.Nodeid = utils.StartNodeId
 
 	ConnToAdmin, AgentStatus.Nodeid = node.AcceptConnFromUpperNode(listenPort, AgentStatus.Nodeid, AgentStatus.AESKey)
 
 	go SendInfo(AgentStatus.Nodeid)
 	go share.SendHeartBeatControl(&ConnToAdmin, AgentStatus.Nodeid, AgentStatus.AESKey)
-	go HandleStartNodeConn(&ConnToAdmin, monitor, listenPort, "", passive, AgentStatus.Nodeid)
+	go HandleStartNodeConn(&ConnToAdmin, monitor, listenPort, "", passive, AgentStatus.Nodeid, proxy, proxyU, proxyP)
 	go node.StartNodeListen(listenPort, AgentStatus.Nodeid, AgentStatus.AESKey)
 	go PrepareForReOnlineNode()
 
@@ -198,7 +198,7 @@ func SimpleNodeReversemodeInit(monitor, listenPort string) {
 }
 
 // StartNodeReuseInit reuseport下的startnode节点
-func StartNodeReuseInit(reuseHost, reusePort, localPort string, method int) {
+func StartNodeReuseInit(reuseHost, reusePort, localPort, proxy, proxyU, proxyP string, method int) {
 	AgentStatus.Nodeid = utils.StartNodeId
 
 	if method == 1 {
@@ -213,7 +213,7 @@ func StartNodeReuseInit(reuseHost, reusePort, localPort string, method int) {
 
 	go SendInfo(AgentStatus.Nodeid)
 	go share.SendHeartBeatControl(&ConnToAdmin, AgentStatus.Nodeid, AgentStatus.AESKey)
-	go HandleStartNodeConn(&ConnToAdmin, "", "", "", true, AgentStatus.Nodeid)
+	go HandleStartNodeConn(&ConnToAdmin, "", "", "", true, AgentStatus.Nodeid, proxy, proxyU, proxyP)
 
 	if method == 1 {
 		go node.StartNodeListenReuse(reuseHost, reusePort, AgentStatus.Nodeid, AgentStatus.AESKey)

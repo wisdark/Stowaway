@@ -20,19 +20,19 @@ import (
 //先暂时不加入，权当一个胡思乱想的idea，今后可视情况增加对startnode保护机制的处理代码，使得入口点更加稳固和隐蔽
 
 // HandleStartNodeConn 处理与startnode的连接
-func HandleStartNodeConn(connToAdmin *net.Conn, monitor, listenPort, reConn string, passive bool, nodeid string) {
+func HandleStartNodeConn(connToAdmin *net.Conn, monitor, listenPort, reConn string, passive bool, nodeid string, proxy, proxyU, proxyP string) {
 	payloadBuffChan := make(chan *utils.Payload, 10)
-	go HandleStartConn(connToAdmin, payloadBuffChan, monitor, listenPort, reConn, passive, nodeid)
+	go HandleStartConn(connToAdmin, payloadBuffChan, monitor, listenPort, reConn, passive, nodeid, proxy, proxyU, proxyP)
 	go HandleDataFromAdmin(connToAdmin, payloadBuffChan, monitor, listenPort, reConn, passive, nodeid)
 	go HandleDataToAdmin(connToAdmin)
 }
 
 // HandleStartConn 处理与admin的信道
-func HandleStartConn(connToAdmin *net.Conn, payloadBuffChan chan *utils.Payload, monitor, listenPort, reConn string, passive bool, nodeid string) {
+func HandleStartConn(connToAdmin *net.Conn, payloadBuffChan chan *utils.Payload, monitor, listenPort, reConn string, passive bool, nodeid string, proxy, proxyU, proxyP string) {
 	for {
 		AdminData, err := utils.ExtractPayload(*connToAdmin, AgentStatus.AESKey, nodeid, false)
 		if err != nil {
-			AdminOffline(reConn, monitor, listenPort, passive)
+			AdminOffline(reConn, monitor, listenPort, proxy, proxyU, proxyP, passive)
 			go SendInfo(nodeid) //重连后发送自身信息
 			go SendNote(nodeid) //重连后发送admin设置的备忘
 			continue
@@ -87,8 +87,12 @@ func HandleDataFromAdmin(connToAdmin *net.Conn, payloadBuffChan chan *utils.Payl
 					socksInfo := strings.Split(AdminData.Info, ":::")
 					AgentStuff.SocksInfo.SocksUsername = socksInfo[1]
 					AgentStuff.SocksInfo.SocksPass = socksInfo[2]
-					StartSocks()
-				case "SOCKSOFF":
+					socksStartMess, _ := utils.ConstructPayload(utils.AdminId, "", "COMMAND", "SOCKSRESP", " ", "SUCCESS", 0, AgentStatus.Nodeid, AgentStatus.AESKey, false)
+					AgentStuff.ProxyChan.ProxyChanToUpperNode <- socksStartMess
+				case "UDPSTARTED":
+					AgentStuff.Socks5UDPAssociate.Lock()
+					AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid].Ready <- AdminData.Info
+					AgentStuff.Socks5UDPAssociate.Unlock()
 				case "SSH":
 					go func() {
 						err := StartSSH(AdminData.Info, nodeid)
@@ -97,7 +101,7 @@ func HandleDataFromAdmin(connToAdmin *net.Conn, payloadBuffChan chan *utils.Payl
 						}
 					}()
 				case "SSHCOMMAND":
-					go WriteCommand(AdminData.Info)
+					WriteCommand(AdminData.Info)
 				case "SSHTUNNEL":
 					go func() {
 						err := SSHTunnelNextNode(AdminData.Info, nodeid)
@@ -238,13 +242,28 @@ func HandleDataFromAdmin(connToAdmin *net.Conn, payloadBuffChan chan *utils.Payl
 						delete(AgentStuff.SocksDataChanMap.Payload, AdminData.Clientid)
 					}
 					AgentStuff.SocksDataChanMap.Unlock()
+				case "UDPFIN":
+					fallthrough
+				case "UDPFINOK":
+					AgentStuff.Socks5UDPAssociate.Lock()
+					if _, ok := AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid]; ok {
+						AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid].Listener.Close()
+						if !utils.IsClosed(AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid].Ready) {
+							close(AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid].Ready)
+						}
+						if !utils.IsClosed(AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid].UDPData) {
+							close(AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid].UDPData)
+						}
+						delete(AgentStuff.Socks5UDPAssociate.Info, AdminData.Clientid)
+					}
+					AgentStuff.Socks5UDPAssociate.Unlock()
 				case "KEEPALIVE":
 				default:
 					continue
 				}
 			case "DATA":
 				switch AdminData.Command {
-				case "SOCKSDATA":
+				case "TCPSOCKSDATA":
 					AgentStuff.SocksDataChanMap.Lock()
 					if _, ok := AgentStuff.SocksDataChanMap.Payload[AdminData.Clientid]; ok {
 						AgentStuff.SocksDataChanMap.Payload[AdminData.Clientid] <- AdminData.Info
@@ -254,6 +273,12 @@ func HandleDataFromAdmin(connToAdmin *net.Conn, payloadBuffChan chan *utils.Payl
 						AgentStuff.SocksDataChanMap.Payload[AdminData.Clientid] <- AdminData.Info
 					}
 					AgentStuff.SocksDataChanMap.Unlock()
+				case "UDPSOCKSDATA":
+					AgentStuff.Socks5UDPAssociate.Lock()
+					if _, ok := AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid]; ok {
+						AgentStuff.Socks5UDPAssociate.Info[AdminData.Clientid].UDPData <- AdminData.Info
+					}
+					AgentStuff.Socks5UDPAssociate.Unlock()
 				case "FILEDATA": //接收文件内容
 					fileDataChan <- []byte(AdminData.Info)
 				case "FORWARDDATA":

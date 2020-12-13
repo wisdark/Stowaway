@@ -13,6 +13,8 @@ Users can easily proxy their network traffic to intranet nodes (multi-layer),bre
 
 PS: Thanks for everyone's star, i'm just an amateur, and the code still need be optimized,so if you find anything wrong or bugs, feel free to tell me, prs and issues are welcome :kissing_heart:. 
 
+PPS: Please read the usage method and the precautions at the end of the article before use!
+
 > This tool is limited to security research and teaching, and the user bears all legal and related responsibilities caused by the use of this tool! The author does not assume any legal and related responsibilities!
 
 ## Features
@@ -20,9 +22,10 @@ PS: Thanks for everyone's star, i'm just an amateur, and the code still need be 
 - Obvious node topology
 - Clear information display of nodes and keep them permanently
 - Active/passive connect mode between nodes
+- Reverse connection between nodes through socks5 proxy
 - Ssh tunnel mode
 - Can be used on multiple platforms
-- Multi-hop socks5 traffic proxy
+- Multi-hop socks5 traffic proxy(Support UDP/TCP,IPV4/IPV6)
 - Multi-hop ssh traffic proxy
 - Remote interactive shell
 - Upload/download functions
@@ -34,7 +37,7 @@ PS: Thanks for everyone's star, i'm just an amateur, and the code still need be 
 
 ## Download and Demo
 
-- Check the [release](https://github.com/ph4ntonn/Stowaway/releases) to get one.And if you want the Uncompressed collection，check [Uncompressed](https://github.com/ph4ntonn/Stowaway/releases/download/v1.6.1/Uncompress_By_Upx.7z) or you can choose the Compressed collection(much more easier for u to upload agent to target server),check [Compressed](https://github.com/ph4ntonn/Stowaway/releases/download/v1.6.1/Compressed_By_Upx.tar)
+- Check the [release](https://github.com/ph4ntonn/Stowaway/releases) to get one.And if you want the Uncompressed collection，check [Uncompressed](https://github.com/ph4ntonn/Stowaway/releases/download/v1.6.2/Uncompress_By_Upx.7z) or you can choose the Compressed collection(much more easier for u to upload agent to target server),check [Compressed](https://github.com/ph4ntonn/Stowaway/releases/download/v1.6.2/Compressed_By_Upx.tar)
 
 - Demo video: [Youtube](https://www.youtube.com/watch?v=O3DHQ1ESMhw)
 
@@ -117,6 +120,30 @@ Stowaway has three kinds of characters:
   The following simple nodes can be started as Example 1's description
 
   The next time you want to reconnect to the startnode and rebuild the whole network,just start the admin node like ```./stowaway_admin -s 123 -c 127.0.0.1:9999```,and then whole network will be rebuilt
+
+## SOCKS5 proxy connection
+
+  Stowaway can perform reverse connections between nodes through socks5 proxy
+
+  That needs following three params ```--proxy```,```--proxyu```, ```--proxyp```
+
+### Example 
+
+  Suppose there is a socks5 server A, ip is 6.6.6.6, proxy port is 1080, username is ph4ntom, password is just4fun 
+
+  startnode needs to be connected to admin via server A, admin is deployed on 7.7.7.7, and the internal network address of startnode is 192.168.0.200 
+
+  admin: ```./stowaway_admin -l 9999 -s 123```
+
+  startnode: ```./stowaway_agent -c 7.7.7.7:9999 --startnode -s 123 -l 10000 --proxy 6.6.6.6:1080 --proxyu ph4ntom --proxyp just4fun```
+
+  At this time, if there is an another socks5 server B in the intranet, the ip is 192.168.0.2, the proxy port is 1080, and there is no username and password.
+
+  And there is a new child node that wants to connect to the startnode node via B,Then run command below
+
+  node: ```./stowaway_agent -c 192.168.0.200:10000 -s 123 --proxy 192.168.0.2:1080```
+
+  That's all :)
 
 ## Port Reuse
 
@@ -225,7 +252,13 @@ For instance：
 
 ![node](https://github.com/ph4ntonn/Stowaway/blob/master/img/node1.png)
 
-Now, use admin node and type in "use 1" -> "connect 127.0.0.1:10001" ,then you can add node 1 into the net
+Now, use admin node and type in ```use 1``` -> ```connect 127.0.0.1:10001``` ,then you can add node 1 into the net
+
+- Let startnode to listen on the port and accept connections from subsequent nodes 
+
+![node](https://github.com/ph4ntonn/Stowaway/blob/master/img/listen.png)
+
+```listen```command enables the current node to listen to the specified port and accept subsequent node connections on this port
 
 - Second simple Node：
 
@@ -268,7 +301,7 @@ Now you can use the admin's port 7777 as the socks5 proxy service
 
 And it can proxy your traffic to the second simple node and the second simple node will do its work like a socks5 server
 
-If you want to set username/password for socks5 service(Firefox support this function, Chrome doesn't), For instance, if you want to set the username as ph4ntom and password as 11235,just change the command to ```socks 7777 ph4ntom 11235``` (Be aware,do not use colon(:) in either username or password)
+If you want to set username/password for socks5 service:For instance, if you want to set the username as ph4ntom and password as 11235,just change the command to ```socks 7777 ph4ntom 11235``` (Be aware,do not use colon(:) in either username or password)
 
 - Shutdown the socks5 proxy service：
 
@@ -282,13 +315,13 @@ And it can make the second simple node do its work as ssh cilent to start a ssh 
 
 PS: In this function,you can type in ```pwd``` to check where you currently are
 
-- Now if you want to add another node into the network, you can choose sshtunnel command：
+- Now if you want to add another node into the network, you can choose ```sshtunnel``` command：
 
 ![node](https://github.com/ph4ntonn/Stowaway/blob/master/img/waiting.png)
 ![node](https://github.com/ph4ntonn/Stowaway/blob/master/img/sshtunnel.png)
 
 
-And I suggest to use the "sshtunnel" command to add the node into network when the firewall has stricted all the traffics expect for SSH.In general,you can just use "connect" command,it also works(arm and mipsel agent doesn't support this function)
+And I suggest to use the ```sshtunnel``` command to add the node into network **ONLY** when the firewall has stricted all the traffics expect for SSH.In general,you can just use ```connect``` command,it also works(arm and mipsel agent doesn't support this function)
 
 - Upload/Download file:
 
@@ -296,7 +329,7 @@ And I suggest to use the "sshtunnel" command to add the node into network when t
 
 ![node](https://github.com/ph4ntonn/Stowaway/blob/master/img/download.png)
 
-If you want to upload/download any files,use upload/download + (filepath),and then you can upload specific file to selected node/download specific file from selected node XD (Be aware! You can just transfer only ONE file at the same time,if you want to transfer more,please wait for the previous one complete.)
+If you want to ```upload/download``` any files,use ```upload/download + (filepath)```,and then you can upload specific file to selected node/download specific file from selected node XD (Be aware! You can just transfer only ONE file at the same time,if you want to transfer more,please wait for the previous one complete.)
 
 - Mapping local port to remote port:
 
@@ -320,10 +353,6 @@ Now anyone who connect to 127.0.0.1:80 will connect to 127.0.0.1:22 in fact(forw
 
 ![node](https://github.com/ph4ntonn/Stowaway/blob/master/img/shutdownreflect.png)
 
-- If you want to open a new listener on node 3 for accepting the following nodes connection,you can use "listen" command
-
-![node](https://github.com/ph4ntonn/Stowaway/blob/master/img/listen.png)
-
 > For more detail, just type ```help``` to get more informations
 
 ## TODO
@@ -344,6 +373,7 @@ Now anyone who connect to 127.0.0.1:80 will connect to 127.0.0.1:22 in fact(forw
 - This program will be slightly bigger than usual after compiled, but actually through my test , it just 1 MB more than usual,Maybe slightly big on IOT platform(1MB maybe not a big deal lol),so if you got any problem when you are using it on IOT platform,just tell me, and i will try my best to decrease the size.
 - The executable file after upx compress seems much more smaller than original one and it really makes upload stowaway to target server easily,but actually ,although it can make uploading stuff easier,it will occupy slightly more memory than original one,so pick the suitable version(upx or non-upx) depends on the target you want to use stowaway on.
 - Admin node MUST be online when new node is being added into the network
+- This program only supports standard UDP ASSOCIATE (that supports UDP proxy) described in [RFC1928](https://www.ietf.org/rfc/rfc1928.txt), please pay attention to what you are using when using socks5 udp proxy Programs (such as scanners, etc.), the packet construction method must comply with the standard [RFC1928] (https://www.ietf.org/rfc/rfc1928.txt), and the packet loss situation needs to be handled by yourself.
 - If you want to compile this project from source code,you can run build_admin.sh/build_agent.sh（Be Mentioned!!!!!!!!!! The default compile result is AGENT mode and please run build_agent.sh. But if you want to compile ADMIN mode,please see the main.go file and FOLLOW THE INSTRUCTION, and next you can run build_admin.sh to get admin mode program.)
 
 ### Thanks

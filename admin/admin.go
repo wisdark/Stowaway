@@ -14,10 +14,11 @@ import (
 )
 
 var AdminStatus *utils.AdminStatus
+var Route *utils.SafeRouteMap
 
 func init() {
-	AdminStatus = new(utils.AdminStatus)
-	AdminStatus.NewAdminStatus()
+	Route = utils.NewSafeRouteMap()
+	AdminStatus = utils.NewAdminStatus()
 }
 
 // NewAdmin 启动admin
@@ -43,10 +44,12 @@ func NewAdmin(c *utils.AdminOptions) {
 	node.SetValidtMessage(AdminStatus.AESKey)
 	node.SetForwardMessage(AdminStatus.AESKey)
 
+	topology := NewTopology()
+
 	if startNodeAddr == "" {
-		go StartListen(listenPort, adminCommandChan)
+		go StartListen(topology, listenPort, adminCommandChan)
 	} else {
-		ConnectToStartNode(startNodeAddr, rhostReuse, adminCommandChan)
+		ConnectToStartNode(topology, startNodeAddr, rhostReuse, adminCommandChan)
 	}
 
 	go AddToChain()
@@ -55,7 +58,7 @@ func NewAdmin(c *utils.AdminOptions) {
 }
 
 // StartListen 启动监听
-func StartListen(listenPort string, adminCommandChan chan []string) {
+func StartListen(topology *Topology, listenPort string, adminCommandChan chan []string) {
 	localAddr := fmt.Sprintf("0.0.0.0:%s", listenPort)
 	localListener, err := net.Listen("tcp", localAddr)
 	if err != nil {
@@ -65,43 +68,48 @@ func StartListen(listenPort string, adminCommandChan chan []string) {
 	for {
 		startNodeConn, _ := localListener.Accept() //一定要有连接进入才可继续操作，故没有连接时，admin端无法操作
 
-		err = node.CheckSecret(startNodeConn, AdminStatus.AESKey)
-		if err != nil {
+		if AdminStatus.StartNode != "offline"{
+			log.Println("[*]Startnode currently online! Only ONE startnode can be connected to admin at the same time!")
+			startNodeConn.Close()
 			continue
 		}
 
-		HandleInitControlConn(startNodeConn, adminCommandChan)
+		err = node.CheckSecret(startNodeConn, AdminStatus.AESKey)
+		if err != nil {
+			log.Println("[*]",err)
+			continue
+		}
+
+		HandleInitControlConn(topology, startNodeConn, adminCommandChan)
 
 		log.Printf("[*]StartNode connected from %s!\n", startNodeConn.RemoteAddr().String())
-
-		return
 	}
 }
 
 // ConnectToStartNode 主动连接startnode端代码
-func ConnectToStartNode(startNodeAddr string, rhostReuse bool, adminCommandChan chan []string) {
+func ConnectToStartNode(topology *Topology, startNodeAddr string, rhostReuse bool, adminCommandChan chan []string) {
 	for {
 		startNodeConn, err := net.Dial("tcp", startNodeAddr)
 		if err != nil {
-			log.Fatal("[*]Connection refused!")
+			log.Fatal("[*]Connection refused!\n")
 		}
 
 		if rhostReuse { //如果startnode在reuse状态下
 			err = node.IfValid(startNodeConn)
 			if err != nil {
 				startNodeConn.Close()
-				log.Fatal("[*]Can't connect to agent,check your -s option or (if you are using iptables mode)maybe you forget to use the 'reuse.py'?")
+				log.Fatal("[*]Can't connect to agent,check your -s option or (if you are using iptables mode)maybe you forget to use the 'reuse.py'?\n")
 			}
 		} else {
 			err := node.SendSecret(startNodeConn, AdminStatus.AESKey)
 			if err != nil {
-				log.Fatal("[*]Connection refused!")
+				log.Fatalf("[*]Connection refused! err is:%s\n",err)
 			}
 		}
 
 		utils.ConstructPayloadAndSend(startNodeConn, utils.StartNodeId, "", "COMMAND", "STOWAWAYADMIN", " ", " ", 0, utils.AdminId, AdminStatus.AESKey, false)
 
-		HandleInitControlConn(startNodeConn, adminCommandChan)
+		HandleInitControlConn(topology, startNodeConn, adminCommandChan)
 
 		log.Printf("[*]Connect to startnode %s successfully!\n", startNodeConn.RemoteAddr().String())
 
@@ -110,7 +118,7 @@ func ConnectToStartNode(startNodeAddr string, rhostReuse bool, adminCommandChan 
 }
 
 // HandleInitControlConn 初始化与startnode的连接
-func HandleInitControlConn(startNodeConn net.Conn, adminCommandChan chan []string) error {
+func HandleInitControlConn(topology *Topology, startNodeConn net.Conn, adminCommandChan chan []string) error {
 	for {
 		command, err := utils.ExtractPayload(startNodeConn, AdminStatus.AESKey, utils.AdminId, true)
 		if err != nil {
@@ -125,25 +133,29 @@ func HandleInitControlConn(startNodeConn net.Conn, adminCommandChan chan []strin
 			AdminStatus.StartNode = strings.Split(startNodeConn.RemoteAddr().String(), ":")[0]
 			AdminStuff.NodeStatus.Nodenote[utils.StartNodeId] = ""
 			AdminStatus.CurrentClient = append(AdminStatus.CurrentClient, utils.StartNodeId) //记录startnode加入网络
-			AddNodeToTopology(utils.StartNodeId, utils.AdminId)
-			CalRoute()
-			go HandleConn(startNodeConn, dataBufferChan)
-			go HandleData(startNodeConn, adminCommandChan, dataBufferChan)
-			go HandleCommandToControlConn(startNodeConn, adminCommandChan)
+			topology.AddNode(utils.StartNodeId, utils.AdminId)
+			topology.CalRoute()
+			go HandleConn(startNodeConn, dataBufferChan, topology)
+			go HandleData(topology, startNodeConn, adminCommandChan, dataBufferChan)
+			go HandleCommandToControlConn(topology, startNodeConn, adminCommandChan)
 			return nil
 		}
 	}
 }
 
 // HandleConn 处理接收startnode数据的信道
-func HandleConn(startNodeConn net.Conn, dataBufferChan chan *utils.Payload) {
+func HandleConn(startNodeConn net.Conn, dataBufferChan chan *utils.Payload, topology *Topology) {
+	defer func() {
+		log.Println("[*]StartNode seems offline")
+		CloseAll(topology, utils.StartNodeId)
+		topology.DelNode(utils.StartNodeId)
+		AdminStatus.StartNode = "offline"
+		startNodeConn.Close()
+	}()
+
 	for {
 		nodeResp, err := utils.ExtractPayload(startNodeConn, AdminStatus.AESKey, utils.AdminId, true)
 		if err != nil {
-			log.Println("[*]StartNode seems offline")
-			DelNodeFromTopology(utils.StartNodeId)
-			AdminStatus.StartNode = "offline"
-			startNodeConn.Close()
 			break
 		}
 		dataBufferChan <- nodeResp
@@ -151,7 +163,7 @@ func HandleConn(startNodeConn net.Conn, dataBufferChan chan *utils.Payload) {
 }
 
 // HandleData 处理startnode信道上的数据
-func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBufferChan chan *utils.Payload) {
+func HandleData(topology *Topology, startNodeConn net.Conn, adminCommandChan chan []string, dataBufferChan chan *utils.Payload) {
 	fileDataChan := make(chan []byte, 1)
 	cannotRead := make(chan bool, 1)
 
@@ -165,13 +177,13 @@ func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBuff
 				log.Println("[*]New node join! Node Id is ", len(AdminStatus.CurrentClient))
 				AdminStatus.NodesReadyToadd <- map[string]string{nodeid: nodeResp.Info} //将此节点加入detail命令所使用的NodeStatus.Nodes结构体
 				AdminStuff.NodeStatus.Nodenote[nodeid] = ""                             //初始的note置空
-				AddNodeToTopology(nodeid, nodeResp.CurrentId)                           //加入拓扑
-				CalRoute()                                                              //计算路由
+				topology.AddNode(nodeid, nodeResp.CurrentId)                            //加入拓扑
+				topology.CalRoute()                                                     //计算路由
 				SendPayloadViaRoute(startNodeConn, nodeid, "COMMAND", "ID", " ", " ", 0, utils.AdminId, AdminStatus.AESKey, false)
 			case "AGENTOFFLINE":
 				log.Println("[*]Node ", FindIntByNodeid(nodeResp.Info)+1, " seems offline") //有节点掉线后，将此节点及其之后的节点删除
-				CloseAll(nodeResp.Info)                                                     //清除一切与此节点及其子节点有关的连接及功能
-				DelNodeFromTopology(nodeResp.Info)                                          //从拓扑中删除
+				CloseAll(topology, nodeResp.Info)                                           //清除一切与此节点及其子节点有关的连接及功能
+				topology.DelNode(nodeResp.Info)                                             //从拓扑中删除
 				//这里不用重新计算路由，因为控制端已经不会允许已掉线的节点及其子节点的流量流通
 				if AdminStatus.HandleNode == nodeResp.Info && *AdminStatus.CliStatus != "admin" { //如果admin端正好操控此节点
 					adminCommandChan <- []string{"exit"}
@@ -196,6 +208,14 @@ func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBuff
 				case "FAILED":
 					fmt.Println("[*]Socks5 service started failed!")
 					AdminStatus.NodeSocksStarted <- false
+				}
+			case "STARTUDPASS":
+				udpListener, listenAddress, ok := StartUDPAssociate(nodeResp.Clientid)
+				if ok {
+					go HandleUDPAssociateListener(startNodeConn, udpListener, nodeResp.CurrentId, nodeResp.Clientid)
+					SendPayloadViaRoute(startNodeConn, AdminStatus.HandleNode, "COMMAND", "UDPSTARTED", " ", listenAddress, nodeResp.Clientid, utils.AdminId, AdminStatus.AESKey, false)
+				} else {
+					SendPayloadViaRoute(startNodeConn, AdminStatus.HandleNode, "COMMAND", "UDPSTARTED", " ", " ", nodeResp.Clientid, utils.AdminId, AdminStatus.AESKey, false)
 				}
 			case "SSHRESP":
 				switch nodeResp.Info {
@@ -261,8 +281,27 @@ func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBuff
 				AdminStuff.ClientSockets.Lock()
 				if _, ok := AdminStuff.ClientSockets.Payload[nodeResp.Clientid]; ok {
 					AdminStuff.ClientSockets.Payload[nodeResp.Clientid].Close()
+					delete(AdminStuff.ClientSockets.Payload, nodeResp.Clientid)
 				}
+				AdminStuff.ClientSockets.Unlock()
+				SendPayloadViaRoute(startNodeConn, nodeResp.CurrentId, "COMMAND", "FINOK", " ", " ", nodeResp.Clientid, utils.AdminId, AdminStatus.AESKey, false)
+			case "UDPFIN":
+				AdminStuff.Socks5UDPAssociate.Lock()
+				if _, ok := AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid]; ok {
+					AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid].Listener.Close()
+					if !utils.IsClosed(AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid].Ready) {
+						close(AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid].Ready)
+					}
+					if !utils.IsClosed(AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid].UDPData) {
+						close(AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid].UDPData)
+					}
+					delete(AdminStuff.Socks5UDPAssociate.Info, nodeResp.Clientid)
+				}
+				AdminStuff.Socks5UDPAssociate.Unlock()
+				SendPayloadViaRoute(startNodeConn, nodeResp.CurrentId, "COMMAND", "UDPFINOK", " ", " ", nodeResp.Clientid, utils.AdminId, AdminStatus.AESKey, false)
+				AdminStuff.ClientSockets.Lock()
 				if _, ok := AdminStuff.ClientSockets.Payload[nodeResp.Clientid]; ok {
+					AdminStuff.ClientSockets.Payload[nodeResp.Clientid].Close()
 					delete(AdminStuff.ClientSockets.Payload, nodeResp.Clientid)
 				}
 				AdminStuff.ClientSockets.Unlock()
@@ -273,8 +312,8 @@ func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBuff
 				AdminStatus.NodesReadyToadd <- map[string]string{nodeResp.CurrentId: ipAddress}
 				AdminStuff.NodeStatus.Nodenote[nodeResp.CurrentId] = ""
 				ReconnAddCurrentClient(nodeResp.CurrentId) //在节点reconn回来的时候要考虑多种情况，若admin是掉线过，可以直接append，若admin没有掉线过，那么就需要判断重连回来的节点序号是否在CurrentClient中，如果已经存在就不需要append
-				AddNodeToTopology(nodeResp.CurrentId, upperNode)
-				CalRoute()
+				topology.AddNode(nodeResp.CurrentId, upperNode)
+				topology.CalRoute()
 			case "HEARTBEAT":
 				utils.ConstructPayloadAndSend(startNodeConn, utils.StartNodeId, "", "COMMAND", "KEEPALIVE", " ", " ", 0, utils.AdminId, AdminStatus.AESKey, false)
 			case "TRANSSUCCESS":
@@ -334,16 +373,26 @@ func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBuff
 			case "SSHMESS":
 				fmt.Print(nodeResp.Info)
 				fmt.Print("(ssh mode)>>>")
-			case "SOCKSDATARESP":
-				AdminStuff.ClientSockets.RLock()
+			case "TSOCKSDATARESP":
+				AdminStuff.ClientSockets.Lock()
 				if _, ok := AdminStuff.ClientSockets.Payload[nodeResp.Clientid]; ok {
 					_, err := AdminStuff.ClientSockets.Payload[nodeResp.Clientid].Write([]byte(nodeResp.Info))
 					if err != nil {
-						AdminStuff.ClientSockets.RUnlock()
+						AdminStuff.ClientSockets.Unlock()
 						continue
 					}
 				}
-				AdminStuff.ClientSockets.RUnlock()
+				AdminStuff.ClientSockets.Unlock()
+			case "USOCKSDATARESP":
+				AdminStuff.Socks5UDPAssociate.Lock()
+				if _, ok := AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid]; ok {
+					_, err := AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid].Listener.WriteToUDP([]byte(nodeResp.Info), AdminStuff.Socks5UDPAssociate.Info[nodeResp.Clientid].Accepter)
+					if err != nil {
+						AdminStuff.Socks5UDPAssociate.Unlock()
+						continue
+					}
+				}
+				AdminStuff.Socks5UDPAssociate.Unlock()
 			case "FILEDATA": //接收文件内容
 				fileDataChan <- []byte(nodeResp.Info)
 			case "FORWARDDATARESP":
@@ -353,7 +402,7 @@ func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBuff
 				}
 				AdminStuff.PortForWardMap.Unlock()
 			case "REFLECTDATA":
-				AdminStuff.ReflectConnMap.RLock()
+				AdminStuff.ReflectConnMap.Lock()
 				if _, ok := AdminStuff.ReflectConnMap.Payload[nodeResp.Clientid]; ok {
 					AdminStuff.PortReflectMap.Lock()
 					if _, ok := AdminStuff.PortReflectMap.Payload[nodeResp.Clientid]; ok {
@@ -365,7 +414,7 @@ func HandleData(startNodeConn net.Conn, adminCommandChan chan []string, dataBuff
 					}
 					AdminStuff.PortReflectMap.Unlock()
 				}
-				AdminStuff.ReflectConnMap.RUnlock()
+				AdminStuff.ReflectConnMap.Unlock()
 			default:
 				continue
 			}

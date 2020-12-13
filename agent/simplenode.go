@@ -84,8 +84,12 @@ func HandleDataFromUpperNode(connToUpperNode *net.Conn, payloadBuffChan chan *ut
 					socksInfo := strings.Split(command.Info, ":::")
 					AgentStuff.SocksInfo.SocksUsername = socksInfo[1]
 					AgentStuff.SocksInfo.SocksPass = socksInfo[2]
-					StartSocks()
-				case "SOCKSOFF":
+					socksStartMess, _ := utils.ConstructPayload(utils.AdminId, "", "COMMAND", "SOCKSRESP", " ", "SUCCESS", 0, AgentStatus.Nodeid, AgentStatus.AESKey, false)
+					AgentStuff.ProxyChan.ProxyChanToUpperNode <- socksStartMess
+				case "UDPSTARTED":
+					AgentStuff.Socks5UDPAssociate.Lock()
+					AgentStuff.Socks5UDPAssociate.Info[command.Clientid].Ready <- command.Info
+					AgentStuff.Socks5UDPAssociate.Unlock()
 				case "SSH":
 					go func() {
 						err := StartSSH(command.Info, nodeid)
@@ -94,7 +98,7 @@ func HandleDataFromUpperNode(connToUpperNode *net.Conn, payloadBuffChan chan *ut
 						}
 					}()
 				case "SSHCOMMAND":
-					go WriteCommand(command.Info)
+					WriteCommand(command.Info)
 				case "SSHTUNNEL":
 					go func() {
 						err := SSHTunnelNextNode(command.Info, nodeid)
@@ -246,13 +250,28 @@ func HandleDataFromUpperNode(connToUpperNode *net.Conn, payloadBuffChan chan *ut
 					}()
 				case "YOURINFO":
 					AgentStatus.NodeNote = command.Info
+				case "UDPFIN":
+					fallthrough
+				case "UDPFINOK":
+					AgentStuff.Socks5UDPAssociate.Lock()
+					if _, ok := AgentStuff.Socks5UDPAssociate.Info[command.Clientid]; ok {
+						AgentStuff.Socks5UDPAssociate.Info[command.Clientid].Listener.Close()
+						if !utils.IsClosed(AgentStuff.Socks5UDPAssociate.Info[command.Clientid].Ready) {
+							close(AgentStuff.Socks5UDPAssociate.Info[command.Clientid].Ready)
+						}
+						if !utils.IsClosed(AgentStuff.Socks5UDPAssociate.Info[command.Clientid].UDPData) {
+							close(AgentStuff.Socks5UDPAssociate.Info[command.Clientid].UDPData)
+						}
+						delete(AgentStuff.Socks5UDPAssociate.Info, command.Clientid)
+					}
+					AgentStuff.Socks5UDPAssociate.Unlock()
 				case "KEEPALIVE":
 				default:
 					continue
 				}
 			case "DATA":
 				switch command.Command {
-				case "SOCKSDATA":
+				case "TCPSOCKSDATA":
 					AgentStuff.SocksDataChanMap.Lock()
 					if _, ok := AgentStuff.SocksDataChanMap.Payload[command.Clientid]; ok {
 						AgentStuff.SocksDataChanMap.Payload[command.Clientid] <- command.Info
@@ -262,6 +281,12 @@ func HandleDataFromUpperNode(connToUpperNode *net.Conn, payloadBuffChan chan *ut
 						AgentStuff.SocksDataChanMap.Payload[command.Clientid] <- command.Info
 					}
 					AgentStuff.SocksDataChanMap.Unlock()
+				case "UDPSOCKSDATA":
+					AgentStuff.Socks5UDPAssociate.Lock()
+					if _, ok := AgentStuff.Socks5UDPAssociate.Info[command.Clientid]; ok {
+						AgentStuff.Socks5UDPAssociate.Info[command.Clientid].UDPData <- command.Info
+					}
+					AgentStuff.Socks5UDPAssociate.Unlock()
 				case "FILEDATA": //接收文件内容
 					fileDataChan <- []byte(command.Info)
 				case "FORWARDDATA":

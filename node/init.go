@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 	"time"
 
 	"Stowaway/utils"
@@ -25,16 +24,22 @@ func init() {
 /*-------------------------一般模式下初始化节点代码--------------------------*/
 
 // StartNodeConn 初始化一个节点连接操作
-func StartNodeConn(monitor string, listenPort string, nodeid string, key []byte) (net.Conn, string, error) {
-	controlConnToUpperNode, err := net.Dial("tcp", monitor)
+func StartNodeConn(monitor string, listenPort string, nodeid string, proxy,proxyU,proxyP string,key []byte) (net.Conn, string, error) {
+	var controlConnToUpperNode net.Conn
+	var err error
+
+	if proxy == ""{
+		controlConnToUpperNode, err = net.Dial("tcp", monitor)
+	} else {
+		controlConnToUpperNode, err = DialViaProxy(monitor,proxy,proxyU,proxyP)
+	}
+
 	if err != nil {
-		log.Println("[*]Connection refused!")
 		return controlConnToUpperNode, "", err
 	}
 
 	err = SendSecret(controlConnToUpperNode, key)
 	if err != nil {
-		log.Println("[*]Connection refused!")
 		return controlConnToUpperNode, "", err
 	}
 
@@ -44,7 +49,6 @@ func StartNodeConn(monitor string, listenPort string, nodeid string, key []byte)
 
 	err = utils.ConstructPayloadAndSend(controlConnToUpperNode, nodeid, "", "COMMAND", "INIT", " ", listenPort, 0, utils.AdminId, key, false)
 	if err != nil {
-		log.Printf("[*]Error occured: %s", err)
 		return controlConnToUpperNode, "", err
 	}
 	//等待admin为其分配一个id号
@@ -70,8 +74,7 @@ func StartNodeListen(listenPort string, nodeid string, key []byte) {
 	waitingForLowerNode, err := net.Listen("tcp", listenAddr)
 
 	if err != nil {
-		log.Printf("[*]Cannot listen on port %s", listenPort)
-		os.Exit(0)
+		log.Fatalf("[*]Cannot listen on port %s", listenPort)
 	}
 
 	for {
@@ -83,6 +86,7 @@ func StartNodeListen(listenPort string, nodeid string, key []byte) {
 
 		err = CheckSecret(connToLowerNode, key)
 		if err != nil {
+			log.Println("[*]", err)
 			continue
 		}
 
@@ -129,7 +133,6 @@ func ConnectNextNode(target string, nodeid string, key []byte) bool {
 
 	err = SendSecret(controlConnToNextNode, key)
 	if err != nil {
-		log.Println("[*]", err)
 		return false
 	}
 
@@ -138,7 +141,6 @@ func ConnectNextNode(target string, nodeid string, key []byte) bool {
 	for {
 		command, err := utils.ExtractPayload(controlConnToNextNode, key, utils.AdminId, true)
 		if err != nil {
-			log.Println("[*]", err)
 			return false
 		}
 
@@ -187,6 +189,7 @@ func AcceptConnFromUpperNode(listenPort string, nodeid string, key []byte) (net.
 
 		err = CheckSecret(comingConn, key)
 		if err != nil {
+			log.Println("[*]", err)
 			continue
 		}
 
@@ -209,7 +212,7 @@ func AcceptConnFromUpperNode(listenPort string, nodeid string, key []byte) (net.
 
 // SendSecret 发送secret值
 func SendSecret(conn net.Conn, key []byte) error {
-	var NOT_VALID = errors.New("not valid")
+	var NOT_VALID = errors.New("Not valid secret,check the secret!")
 
 	defer conn.SetReadDeadline(time.Time{})
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -241,7 +244,7 @@ func SendSecret(conn net.Conn, key []byte) error {
 
 // CheckSecret 检查secret值，在连接建立前测试合法性
 func CheckSecret(conn net.Conn, key []byte) error {
-	var NOT_VALID = errors.New("not valid")
+	var NOT_VALID = errors.New("Not valid secret,check the secret!")
 
 	defer conn.SetReadDeadline(time.Time{})
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
