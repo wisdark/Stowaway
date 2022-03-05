@@ -91,6 +91,7 @@ Stowaway一共包含两种角色，分别是：
 --report 端口复用时复用的端口号
 --up 上游协议类型,默认为裸TCP流量,可选HTTP
 --down 下游协议类型,默认为裸TCP流量,可选HTTP
+--cs 运行平台的shell编码类型，默认为utf-8，可选gbk
 ```
 
 ### 参数用法
@@ -194,6 +195,11 @@ agent之间也与上面情况一致
 #### --rehost/--report
 
 这两个参数比较特别，仅用在agent端，详细请参见下方的端口复用机制
+
+#### --cs
+此参数仅用在agent，可用在主动&&被动模式下
+主要旨在解决'shell'功能乱码问题，当用户将agent运行于控制台编码为gbk的平台上(例如一般情况下的Windows)并且同时admin运行于控制台编码为utf-8的平台上时，请务必将此参数设置为'gbk'
+- Windows: ```./stowaway_agent -c 127.0.0.1:9999 -s 123 --cs gbk```
 
 ## 端口复用机制
 
@@ -644,15 +650,20 @@ $
 - 如果用户使用windows下的admin端，请先下载[ansicon](https://github.com/adoxa/ansicon/releases)，或者在[这里]()下载，之后进入对应系统位数的文件夹，执行```ansicon.exe -i```即可，不然admin端会出现乱码的问题
 - 本程序仅支持标准的基于[RFC1928](https://www.ietf.org/rfc/rfc1928.txt)所阐述的```UDP ASSOCIATE```，请在使用socks5 udp代理时注意您所使用的程序(例如扫描器等)，包构造方式必须遵守标准的[RFC1928](https://www.ietf.org/rfc/rfc1928.txt)，并且需要自行处理丢包状况。
 
-## 404StarLink 2.0 - Galaxy
+## 404星链计划
+<img src="https://github.com/knownsec/404StarLink/raw/master/Images/logo.png" width="30%">
 
-![](https://github.com/knownsec/404StarLink-Project/raw/master/logo.png)
-
-Stowaway 是 404Team [星链计划2.0](https://github.com/knownsec/404StarLink2.0-Galaxy) 中的一环，如果对 Stowaway 有任何疑问又或是想要找小伙伴交流，可以参考星链计划的加群方式。
-
-- [https://github.com/knownsec/404StarLink2.0-Galaxy#community](https://github.com/knownsec/404StarLink2.0-Galaxy#community)
+Stowaway 现已加入 [404星链计划](https://github.com/knownsec/404StarLink)
 
 ## 致谢
+
+感谢所有为此项目贡献代码以及建议的师傅们~
+- [lz520520](https://github.com/lz520520)
+- [SignorMercurio](https://github.com/SignorMercurio)
+- [MM0x00](https://github.com/MM0x00)
+- [r0ck3rt](https://github.com/r0ck3rt)
+
+## 参考项目
 
 - [rootkiter#Termite](https://github.com/rootkiter/Termite)
 - [Venom](https://github.com/Dliv3/Venom)
