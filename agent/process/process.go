@@ -64,7 +64,7 @@ func (agent *Agent) Run() {
 }
 
 func (agent *Agent) sendMyInfo() {
-	sMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 	header := &protocol.Header{
 		Sender:      agent.UUID,
 		Accepter:    protocol.ADMIN_UUID,
@@ -91,14 +91,14 @@ func (agent *Agent) sendMyInfo() {
 }
 
 func (agent *Agent) handleDataFromUpstream() {
-	rMessage := protocol.PrepareAndDecideWhichRProtoFromUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	rMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	for {
 		header, message, err := protocol.DestructMessage(rMessage)
 		if err != nil {
 			upstreamOffline(agent.mgr, agent.options)
 			// Update rMessage
-			rMessage = protocol.PrepareAndDecideWhichRProtoFromUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+			rMessage = protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 			go agent.sendMyInfo()
 			continue
 		}
@@ -168,6 +168,7 @@ func (agent *Agent) handleDataFromUpstream() {
 				agent.mgr.OfflineManager.OfflineMessChan <- message
 			case protocol.SHUTDOWN:
 				os.Exit(0)
+			case protocol.HEARTBEAT:
 			default:
 				log.Println("[*] Unknown Message!")
 			}
@@ -196,7 +197,7 @@ func (agent *Agent) dispatchChildrenMess() {
 			continue
 		}
 
-		sMessage := protocol.PrepareAndDecideWhichSProtoToLower(result.Conn, global.G_Component.Secret, global.G_Component.UUID)
+		sMessage := protocol.NewDownMsg(result.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 		protocol.ConstructMessage(sMessage, childrenMess.cHeader, childrenMess.cMessage, true)
 		sMessage.SendMessage()
@@ -211,7 +212,7 @@ func (agent *Agent) waitingChild() {
 }
 
 func (agent *Agent) handleDataFromDownstream(conn net.Conn, uuid string) {
-	rMessage := protocol.PrepareAndDecideWhichRProtoFromLower(conn, global.G_Component.Secret, global.G_Component.UUID)
+	rMessage := protocol.NewDownMsg(conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	for {
 		header, message, err := protocol.DestructMessage(rMessage)
@@ -220,7 +221,7 @@ func (agent *Agent) handleDataFromDownstream(conn net.Conn, uuid string) {
 			return
 		}
 
-		sMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+		sMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 		protocol.ConstructMessage(sMessage, header, message, true)
 		sMessage.SendMessage()

@@ -1,4 +1,4 @@
-// +build !windows
+//go:build !windows
 
 package main
 
@@ -27,12 +27,18 @@ func main() {
 	printer.InitPrinter()
 
 	termbox.Init()
+	termbox.SetCursor(0, 0)
+	termbox.Flush()
+
+	go listenCtrlC()
 
 	options := initial.ParseOptions()
 
-	protocol.DecideType("raw", options.Downstream)
-
 	cli.Banner()
+
+	share.GeneratePreAuthToken(options.Secret)
+
+	protocol.SetUpDownStream("raw", options.Downstream)
 
 	topo := topology.NewTopology()
 	go topo.Run()
@@ -55,9 +61,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	admin := process.NewAdmin()
+	// kill listenCtrlC
+	termbox.Interrupt()
 
-	admin.Topology = topo
+	admin := process.NewAdmin(options, topo)
 
 	topoTask := &topology.TopoTask{
 		Mode: topology.CALCULATE,
@@ -68,4 +75,19 @@ func main() {
 	global.InitialGComponent(conn, options.Secret, protocol.ADMIN_UUID)
 
 	admin.Run()
+}
+
+// let process exit if nothing connected
+func listenCtrlC() {
+	for {
+		event := termbox.PollEvent()
+		if event.Type == termbox.EventInterrupt {
+			break
+		}
+
+		if event.Key == termbox.KeyCtrlC {
+			termbox.Close()
+			os.Exit(0)
+		}
+	}
 }

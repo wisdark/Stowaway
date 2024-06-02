@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"Stowaway/admin/manager"
 	"Stowaway/admin/topology"
@@ -14,17 +15,34 @@ import (
 type Socks struct {
 	Username string
 	Password string
+	Addr     string
 	Port     string
 }
 
-func NewSocks(port string) *Socks {
+func NewSocks(param string) *Socks {
 	socks := new(Socks)
-	socks.Port = port
+
+	slice := strings.SplitN(param, ":", 2)
+
+	if len(slice) < 2 {
+		socks.Port = param
+	} else {
+		socks.Addr = slice[0]
+		socks.Port = slice[1]
+	}
+
 	return socks
 }
 
 func (socks *Socks) LetSocks(mgr *manager.Manager, route string, uuid string) error {
-	addr := fmt.Sprintf("0.0.0.0:%s", socks.Port)
+	var addr string
+
+	if socks.Addr != "" {
+		addr = fmt.Sprintf("%s:%s", socks.Addr, socks.Port)
+	} else {
+		addr = fmt.Sprintf("0.0.0.0:%s", socks.Port)
+	}
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -48,7 +66,7 @@ func (socks *Socks) LetSocks(mgr *manager.Manager, route string, uuid string) er
 		return err
 	}
 
-	sMessage := protocol.PrepareAndDecideWhichSProtoToLower(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sMessage := protocol.NewDownMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	header := &protocol.Header{
 		Sender:      protocol.ADMIN_UUID,
@@ -116,7 +134,7 @@ func (socks *Socks) handleSocksListener(mgr *manager.Manager, listener net.Liste
 }
 
 func (socks *Socks) handleSocks(mgr *manager.Manager, conn net.Conn, route string, uuid string, seq uint64) {
-	sMessage := protocol.PrepareAndDecideWhichSProtoToLower(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sMessage := protocol.NewDownMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	header := &protocol.Header{
 		Sender:      protocol.ADMIN_UUID,
@@ -260,7 +278,7 @@ func startUDPAss(mgr *manager.Manager, topo *topology.Topology, seq uint64) {
 		OK:  0,
 	}
 
-	sMessage := protocol.PrepareAndDecideWhichSProtoToLower(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sMessage := protocol.NewDownMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	defer func() {
 		if err != nil {
@@ -311,7 +329,7 @@ func startUDPAss(mgr *manager.Manager, topo *topology.Topology, seq uint64) {
 }
 
 func handleUDPAss(mgr *manager.Manager, listener *net.UDPConn, route string, uuid string, seq uint64) {
-	sMessage := protocol.PrepareAndDecideWhichSProtoToLower(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sMessage := protocol.NewDownMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	dataHeader := &protocol.Header{
 		Sender:      protocol.ADMIN_UUID,

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/tls"
 	"errors"
 	"net"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"Stowaway/global"
 	"Stowaway/protocol"
 	"Stowaway/share"
+	"Stowaway/share/transport"
 )
 
 type Connect struct {
@@ -24,7 +26,7 @@ func newConnect(addr string) *Connect {
 func (connect *Connect) start(mgr *manager.Manager) {
 	var sUMessage, sLMessage, rMessage protocol.Message
 
-	sUMessage = protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sUMessage = protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	hiHeader := &protocol.Header{
 		Sender:      protocol.ADMIN_UUID, // fake admin
@@ -78,16 +80,32 @@ func (connect *Connect) start(mgr *manager.Manager) {
 		return
 	}
 
-	if err = share.ActivePreAuth(conn, global.G_Component.Secret); err != nil {
+	if global.G_TLSEnable {
+		var tlsConfig *tls.Config
+		// Set domain as null since we are in the intranet
+		tlsConfig, err = transport.NewClientTLSConfig("")
+		if err != nil {
+			conn.Close()
+			return
+		}
+		conn = transport.WrapTLSClientConn(conn, tlsConfig)
+	}
+	// There's no need for the "domain" parameter between intranet nodes
+	param := new(protocol.NegParam)
+	param.Conn = conn
+	proto := protocol.NewDownProto(param)
+	proto.CNegotiate()
+
+	if err = share.ActivePreAuth(conn); err != nil {
 		return
 	}
 
-	sLMessage = protocol.PrepareAndDecideWhichSProtoToLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID)
+	sLMessage = protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID)
 
 	protocol.ConstructMessage(sLMessage, hiHeader, hiMess, false)
 	sLMessage.SendMessage()
 
-	rMessage = protocol.PrepareAndDecideWhichRProtoFromLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID)
+	rMessage = protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID)
 	fHeader, fMessage, err := protocol.DestructMessage(rMessage)
 
 	if err != nil {

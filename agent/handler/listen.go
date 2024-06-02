@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"time"
 
@@ -11,7 +13,7 @@ import (
 	"Stowaway/global"
 	"Stowaway/protocol"
 	"Stowaway/share"
-	"Stowaway/utils"
+	"Stowaway/share/transport"
 
 	reuseport "github.com/libp2p/go-reuseport"
 )
@@ -35,7 +37,7 @@ func newListen(method int, addr string) *Listen {
 }
 
 func (listen *Listen) start(mgr *manager.Manager, options *initial.Options) {
-	sUMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sUMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	resHeader := &protocol.Header{
 		Sender:      global.G_Component.UUID,
@@ -75,7 +77,7 @@ func (listen *Listen) start(mgr *manager.Manager, options *initial.Options) {
 }
 
 func (listen *Listen) normalListen(mgr *manager.Manager, options *initial.Options) {
-	sUMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sUMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	resHeader := &protocol.Header{
 		Sender:      global.G_Component.UUID,
@@ -108,16 +110,32 @@ func (listen *Listen) normalListen(mgr *manager.Manager, options *initial.Option
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			log.Printf("[*] Error occurred: %s\n", err.Error())
+			continue
+		}
+
+		if global.G_TLSEnable {
+			var tlsConfig *tls.Config
+			tlsConfig, err = transport.NewServerTLSConfig()
+			if err != nil {
+				log.Printf("[*] Error occured: %s", err.Error())
+				conn.Close()
+				continue
+			}
+			conn = transport.WrapTLSServerConn(conn, tlsConfig)
+		}
+
+		param := new(protocol.NegParam)
+		param.Conn = conn
+		proto := protocol.NewDownProto(param)
+		proto.SNegotiate()
+
+		if err := share.PassivePreAuth(conn); err != nil {
 			conn.Close()
 			continue
 		}
 
-		if err := share.PassivePreAuth(conn, global.G_Component.Secret); err != nil {
-			conn.Close()
-			continue
-		}
-
-		rMessage := protocol.PrepareAndDecideWhichRProtoFromLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
+		rMessage := protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
 		fHeader, fMessage, err := protocol.DestructMessage(rMessage)
 		if err != nil {
 			conn.Close()
@@ -130,7 +148,7 @@ func (listen *Listen) normalListen(mgr *manager.Manager, options *initial.Option
 			if mmess.Greeting == "Shhh..." && mmess.IsAdmin == 0 {
 				var childUUID string
 
-				sLMessage := protocol.PrepareAndDecideWhichSProtoToLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
+				sLMessage := protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
 
 				hiMess := &protocol.HIMess{
 					GreetingLen: uint16(len("Keep slient")),
@@ -235,7 +253,7 @@ func (listen *Listen) normalListen(mgr *manager.Manager, options *initial.Option
 }
 
 func (listen *Listen) iptablesListen(mgr *manager.Manager, options *initial.Options) {
-	sUMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sUMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	resHeader := &protocol.Header{
 		Sender:      global.G_Component.UUID,
@@ -272,16 +290,32 @@ func (listen *Listen) iptablesListen(mgr *manager.Manager, options *initial.Opti
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			log.Printf("[*] Error occurred: %s\n", err.Error())
+			continue
+		}
+
+		if global.G_TLSEnable {
+			var tlsConfig *tls.Config
+			tlsConfig, err = transport.NewServerTLSConfig()
+			if err != nil {
+				log.Printf("[*] Error occured: %s", err.Error())
+				conn.Close()
+				continue
+			}
+			conn = transport.WrapTLSServerConn(conn, tlsConfig)
+		}
+
+		param := new(protocol.NegParam)
+		param.Conn = conn
+		proto := protocol.NewDownProto(param)
+		proto.SNegotiate()
+
+		if err := share.PassivePreAuth(conn); err != nil {
 			conn.Close()
 			continue
 		}
 
-		if err := share.PassivePreAuth(conn, global.G_Component.Secret); err != nil {
-			conn.Close()
-			continue
-		}
-
-		rMessage := protocol.PrepareAndDecideWhichRProtoFromLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
+		rMessage := protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
 		fHeader, fMessage, err := protocol.DestructMessage(rMessage)
 
 		if err != nil {
@@ -295,7 +329,7 @@ func (listen *Listen) iptablesListen(mgr *manager.Manager, options *initial.Opti
 			if mmess.Greeting == "Shhh..." && mmess.IsAdmin == 0 {
 				var childUUID string
 
-				sLMessage := protocol.PrepareAndDecideWhichSProtoToLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
+				sLMessage := protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
 
 				hiMess := &protocol.HIMess{
 					GreetingLen: uint16(len("Keep slient")),
@@ -400,7 +434,7 @@ func (listen *Listen) iptablesListen(mgr *manager.Manager, options *initial.Opti
 }
 
 func (listen *Listen) soReuseListen(mgr *manager.Manager, options *initial.Options) {
-	sUMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sUMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	resHeader := &protocol.Header{
 		Sender:      global.G_Component.UUID,
@@ -431,14 +465,28 @@ func (listen *Listen) soReuseListen(mgr *manager.Manager, options *initial.Optio
 	protocol.ConstructMessage(sUMessage, resHeader, succMess, false)
 	sUMessage.SendMessage()
 
-	secret := utils.GetStringMd5(options.Secret)
-
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			conn.Close()
+			log.Printf("[*] Error occurred: %s\n", err.Error())
 			continue
 		}
+
+		if global.G_TLSEnable {
+			var tlsConfig *tls.Config
+			tlsConfig, err = transport.NewServerTLSConfig()
+			if err != nil {
+				log.Printf("[*] Error occured: %s", err.Error())
+				conn.Close()
+				continue
+			}
+			conn = transport.WrapTLSServerConn(conn, tlsConfig)
+		}
+
+		param := new(protocol.NegParam)
+		param.Conn = conn
+		proto := protocol.NewDownProto(param)
+		proto.SNegotiate()
 
 		defer conn.SetReadDeadline(time.Time{})
 		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -456,14 +504,14 @@ func (listen *Listen) soReuseListen(mgr *manager.Manager, options *initial.Optio
 			}
 		}
 
-		if string(buffer[:count]) == secret[:16] {
-			conn.Write([]byte(secret[:16]))
+		if string(buffer[:count]) == share.AuthToken {
+			conn.Write([]byte(share.AuthToken))
 		} else {
 			go initial.ProxyStream(conn, buffer[:count], options.ReusePort)
 			continue
 		}
 
-		rMessage := protocol.PrepareAndDecideWhichRProtoFromLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
+		rMessage := protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
 		fHeader, fMessage, err := protocol.DestructMessage(rMessage)
 
 		if err != nil {
@@ -477,7 +525,7 @@ func (listen *Listen) soReuseListen(mgr *manager.Manager, options *initial.Optio
 			if mmess.Greeting == "Shhh..." && mmess.IsAdmin == 0 {
 				var childUUID string
 
-				sLMessage := protocol.PrepareAndDecideWhichSProtoToLower(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
+				sLMessage := protocol.NewDownMsg(conn, global.G_Component.Secret, protocol.ADMIN_UUID) //fake admin
 
 				hiMess := &protocol.HIMess{
 					GreetingLen: uint16(len("Keep slient")),

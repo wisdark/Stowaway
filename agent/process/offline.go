@@ -1,6 +1,7 @@
 package process
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"Stowaway/global"
 	"Stowaway/protocol"
 	"Stowaway/share"
+	"Stowaway/share/transport"
 	"Stowaway/utils"
 
 	reuseport "github.com/libp2p/go-reuseport"
@@ -89,15 +91,32 @@ func normalPassiveReconn(options *initial.Options) net.Conn {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			log.Printf("[*] Error occurred: %s\n", err.Error())
 			continue
 		}
 
-		if err := share.PassivePreAuth(conn, options.Secret); err != nil {
+		if global.G_TLSEnable {
+			var tlsConfig *tls.Config
+			tlsConfig, err = transport.NewServerTLSConfig()
+			if err != nil {
+				log.Printf("[*] Error occured: %s", err.Error())
+				conn.Close()
+				continue
+			}
+			conn = transport.WrapTLSServerConn(conn, tlsConfig)
+		}
+
+		param := new(protocol.NegParam)
+		param.Conn = conn
+		proto := protocol.NewUpProto(param)
+		proto.SNegotiate()
+
+		if err := share.PassivePreAuth(conn); err != nil {
 			conn.Close()
 			continue
 		}
 
-		rMessage = protocol.PrepareAndDecideWhichRProtoFromUpper(conn, options.Secret, protocol.TEMP_UUID)
+		rMessage = protocol.NewUpMsg(conn, options.Secret, protocol.TEMP_UUID)
 		fHeader, fMessage, err := protocol.DestructMessage(rMessage)
 
 		if err != nil {
@@ -108,7 +127,7 @@ func normalPassiveReconn(options *initial.Options) net.Conn {
 		if fHeader.MessageType == protocol.HI {
 			mmess := fMessage.(*protocol.HIMess)
 			if mmess.Greeting == "Shhh..." && mmess.IsAdmin == 1 {
-				sMessage = protocol.PrepareAndDecideWhichSProtoToUpper(conn, options.Secret, protocol.TEMP_UUID)
+				sMessage = protocol.NewUpMsg(conn, options.Secret, protocol.TEMP_UUID)
 				protocol.ConstructMessage(sMessage, header, hiMess, false)
 				sMessage.SendMessage()
 				return conn
@@ -154,13 +173,28 @@ func soReusePassiveReconn(options *initial.Options) net.Conn {
 		Route:       protocol.TEMP_ROUTE,
 	}
 
-	secret := utils.GetStringMd5(options.Secret)
-
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			log.Printf("[*] Error occurred: %s\n", err.Error())
 			continue
 		}
+
+		if global.G_TLSEnable {
+			var tlsConfig *tls.Config
+			tlsConfig, err = transport.NewServerTLSConfig()
+			if err != nil {
+				log.Printf("[*] Error occured: %s", err.Error())
+				conn.Close()
+				continue
+			}
+			conn = transport.WrapTLSServerConn(conn, tlsConfig)
+		}
+
+		param := new(protocol.NegParam)
+		param.Conn = conn
+		proto := protocol.NewUpProto(param)
+		proto.SNegotiate()
 
 		defer conn.SetReadDeadline(time.Time{})
 		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -178,14 +212,14 @@ func soReusePassiveReconn(options *initial.Options) net.Conn {
 			}
 		}
 
-		if string(buffer[:count]) == secret[:16] {
-			conn.Write([]byte(secret[:16]))
+		if string(buffer[:count]) == share.AuthToken {
+			conn.Write([]byte(share.AuthToken))
 		} else {
 			go initial.ProxyStream(conn, buffer[:count], options.ReusePort)
 			continue
 		}
 
-		rMessage = protocol.PrepareAndDecideWhichRProtoFromUpper(conn, options.Secret, protocol.TEMP_UUID)
+		rMessage = protocol.NewUpMsg(conn, options.Secret, protocol.TEMP_UUID)
 		fHeader, fMessage, err := protocol.DestructMessage(rMessage)
 
 		if err != nil {
@@ -196,7 +230,7 @@ func soReusePassiveReconn(options *initial.Options) net.Conn {
 		if fHeader.MessageType == protocol.HI {
 			mmess := fMessage.(*protocol.HIMess)
 			if mmess.Greeting == "Shhh..." && mmess.IsAdmin == 1 {
-				sMessage = protocol.PrepareAndDecideWhichSProtoToUpper(conn, options.Secret, protocol.TEMP_UUID)
+				sMessage = protocol.NewUpMsg(conn, options.Secret, protocol.TEMP_UUID)
 				protocol.ConstructMessage(sMessage, header, hiMess, false)
 				sMessage.SendMessage()
 				return conn
@@ -244,18 +278,36 @@ func normalReconnActiveReconn(options *initial.Options, proxy share.Proxy) net.C
 			continue
 		}
 
-		if err := share.ActivePreAuth(conn, options.Secret); err != nil {
+		if global.G_TLSEnable {
+			var tlsConfig *tls.Config
+			tlsConfig, err = transport.NewClientTLSConfig(options.Domain)
+			if err != nil {
+				conn.Close()
+				time.Sleep(time.Duration(options.Reconnect) * time.Second)
+				continue
+			}
+			conn = transport.WrapTLSClientConn(conn, tlsConfig)
+		}
+
+		param := new(protocol.NegParam)
+		param.Addr = options.Connect
+		param.Conn = conn
+		param.Domain = options.Domain
+		proto := protocol.NewUpProto(param)
+		proto.CNegotiate()
+
+		if err := share.ActivePreAuth(conn); err != nil {
 			conn.Close()
 			time.Sleep(time.Duration(options.Reconnect) * time.Second)
 			continue
 		}
 
-		sMessage = protocol.PrepareAndDecideWhichSProtoToUpper(conn, options.Secret, protocol.TEMP_UUID)
+		sMessage = protocol.NewUpMsg(conn, options.Secret, protocol.TEMP_UUID)
 
 		protocol.ConstructMessage(sMessage, header, hiMess, false)
 		sMessage.SendMessage()
 
-		rMessage = protocol.PrepareAndDecideWhichRProtoFromUpper(conn, options.Secret, protocol.TEMP_UUID)
+		rMessage = protocol.NewUpMsg(conn, options.Secret, protocol.TEMP_UUID)
 		fHeader, fMessage, err := protocol.DestructMessage(rMessage)
 
 		if err != nil {
@@ -312,7 +364,7 @@ func broadcastOfflineMess(mgr *manager.Manager) {
 		mgr.ChildrenManager.TaskChan <- task
 		result = <-mgr.ChildrenManager.ResultChan
 
-		sMessage := protocol.PrepareAndDecideWhichSProtoToLower(result.Conn, global.G_Component.Secret, global.G_Component.UUID)
+		sMessage := protocol.NewDownMsg(result.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 		header := &protocol.Header{
 			Sender:      global.G_Component.UUID,
@@ -347,7 +399,7 @@ func broadcastReonlineMess(mgr *manager.Manager) {
 		mgr.ChildrenManager.TaskChan <- task
 		result = <-mgr.ChildrenManager.ResultChan
 
-		sMessage := protocol.PrepareAndDecideWhichSProtoToLower(result.Conn, global.G_Component.Secret, global.G_Component.UUID)
+		sMessage := protocol.NewDownMsg(result.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 		header := &protocol.Header{
 			Sender:      global.G_Component.UUID,
@@ -375,7 +427,7 @@ func downStreamOffline(mgr *manager.Manager, options *initial.Options, uuid stri
 	mgr.ChildrenManager.TaskChan <- childrenTask
 	<-mgr.ChildrenManager.ResultChan
 
-	sMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	header := &protocol.Header{
 		Sender:      global.G_Component.UUID,
@@ -402,7 +454,7 @@ func tellAdminReonline(mgr *manager.Manager) {
 	mgr.ChildrenManager.TaskChan <- childrenTask
 	result := <-mgr.ChildrenManager.ResultChan
 
-	sMessage := protocol.PrepareAndDecideWhichSProtoToUpper(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
+	sMessage := protocol.NewUpMsg(global.G_Component.Conn, global.G_Component.Secret, global.G_Component.UUID)
 
 	reheader := &protocol.Header{
 		Sender:      global.G_Component.UUID,

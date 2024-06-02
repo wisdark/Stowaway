@@ -63,11 +63,23 @@ const (
 	UPSTREAMOFFLINE
 	UPSTREAMREONLINE
 	SHUTDOWN
+	HEARTBEAT
 )
 
 const ADMIN_UUID = "IAMADMINXD"
 const TEMP_UUID = "IAMNEWHERE"
 const TEMP_ROUTE = "THEREISNOROUTE"
+
+type Proto interface {
+	CNegotiate() error
+	SNegotiate() error
+}
+
+type NegParam struct {
+	Addr   string
+	Domain string
+	Conn   net.Conn
+}
 
 type Message interface {
 	ConstructHeader()
@@ -404,27 +416,71 @@ type Shutdown struct {
 	OK uint16
 }
 
+type HeartbeatMsg struct {
+	Ping uint16
+}
+
 type MessageComponent struct {
 	UUID   string
 	Conn   net.Conn
 	Secret string
 }
 
-func DecideType(upstream, downstream string) {
-	if upstream == "http" {
+func SetUpDownStream(upstream, downstream string) {
+	if upstream == "ws" {
+		Upstream = "ws"
+	} else if upstream == "http" {
 		Upstream = "http"
 	} else {
 		Upstream = "raw"
 	}
 
-	if downstream == "http" {
+	if downstream == "ws" {
+		Downstream = "ws"
+	} else if downstream == "http" {
 		Downstream = "http"
 	} else {
 		Downstream = "raw"
 	}
 }
 
-func PrepareAndDecideWhichSProtoToUpper(conn net.Conn, secret string, uuid string) Message {
+func NewUpProto(param *NegParam) Proto {
+	switch Upstream {
+	case "raw":
+		tProto := new(RawProto)
+		return tProto
+	case "http":
+		tProto := new(HTTPProto)
+		return tProto
+	case "ws":
+		tProto := new(WSProto)
+		tProto.addr = param.Addr
+		tProto.domain = param.Domain
+		tProto.conn = param.Conn
+		return tProto
+	}
+	return nil
+}
+
+func NewDownProto(param *NegParam) Proto {
+	switch Downstream {
+	case "raw":
+		tProto := new(RawProto)
+		return tProto
+	case "http":
+		tProto := new(HTTPProto)
+		return tProto
+	case "ws":
+		tProto := new(WSProto)
+		tProto.addr = param.Addr
+		tProto.domain = param.Domain
+		tProto.conn = param.Conn
+		return tProto
+	}
+	return nil
+}
+
+func NewUpMsg(conn net.Conn, secret string, uuid string) Message {
 	switch Upstream {
 	case "raw":
 		tMessage := new(RawMessage)
@@ -432,6 +488,13 @@ func PrepareAndDecideWhichSProtoToUpper(conn net.Conn, secret string, uuid strin
 		tMessage.UUID = uuid
 		tMessage.CryptoSecret = crypto.KeyPadding([]byte(secret))
 		return tMessage
+	case "ws":
+		tMessage := new(WSMessage)
+		tMessage.RawMessage = new(RawMessage)
+		tMessage.RawMessage.Conn = conn
+		tMessage.RawMessage.UUID = uuid
+		tMessage.RawMessage.CryptoSecret = crypto.KeyPadding([]byte(secret))
+		return tMessage
 	case "http":
 		tMessage := new(HTTPMessage)
 		tMessage.RawMessage = new(RawMessage)
@@ -443,7 +506,7 @@ func PrepareAndDecideWhichSProtoToUpper(conn net.Conn, secret string, uuid strin
 	return nil
 }
 
-func PrepareAndDecideWhichSProtoToLower(conn net.Conn, secret string, uuid string) Message {
+func NewDownMsg(conn net.Conn, secret string, uuid string) Message {
 	switch Downstream {
 	case "raw":
 		tMessage := new(RawMessage)
@@ -451,43 +514,12 @@ func PrepareAndDecideWhichSProtoToLower(conn net.Conn, secret string, uuid strin
 		tMessage.UUID = uuid
 		tMessage.CryptoSecret = crypto.KeyPadding([]byte(secret))
 		return tMessage
-	case "http":
-		tMessage := new(HTTPMessage)
+	case "ws":
+		tMessage := new(WSMessage)
 		tMessage.RawMessage = new(RawMessage)
 		tMessage.RawMessage.Conn = conn
 		tMessage.RawMessage.UUID = uuid
 		tMessage.RawMessage.CryptoSecret = crypto.KeyPadding([]byte(secret))
-		return tMessage
-	}
-	return nil
-}
-
-func PrepareAndDecideWhichRProtoFromUpper(conn net.Conn, secret string, uuid string) Message {
-	switch Upstream {
-	case "raw":
-		tMessage := new(RawMessage)
-		tMessage.Conn = conn
-		tMessage.UUID = uuid
-		tMessage.CryptoSecret = crypto.KeyPadding([]byte(secret))
-		return tMessage
-	case "http":
-		tMessage := new(HTTPMessage)
-		tMessage.RawMessage = new(RawMessage)
-		tMessage.RawMessage.Conn = conn
-		tMessage.RawMessage.UUID = uuid
-		tMessage.RawMessage.CryptoSecret = crypto.KeyPadding([]byte(secret))
-		return tMessage
-	}
-	return nil
-}
-
-func PrepareAndDecideWhichRProtoFromLower(conn net.Conn, secret string, uuid string) Message {
-	switch Downstream {
-	case "raw":
-		tMessage := new(RawMessage)
-		tMessage.Conn = conn
-		tMessage.UUID = uuid
-		tMessage.CryptoSecret = crypto.KeyPadding([]byte(secret))
 		return tMessage
 	case "http":
 		tMessage := new(HTTPMessage)

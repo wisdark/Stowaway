@@ -1,5 +1,8 @@
 package protocol
 
+// http.go is deprecated
+// Just keep this for sample
+
 import (
 	"fmt"
 	"io"
@@ -7,10 +10,16 @@ import (
 	"Stowaway/utils"
 )
 
+type HTTPProto struct{}
+
 type HTTPMessage struct {
 	HTTPHeader []byte
 	*RawMessage
 }
+
+func (proto *HTTPProto) CNegotiate() error { return nil }
+
+func (proto *HTTPProto) SNegotiate() error { return nil }
 
 var partOne []string = []string{
 	"POST /message/%s?number=%d&length=%d",

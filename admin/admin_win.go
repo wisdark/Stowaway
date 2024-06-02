@@ -1,4 +1,4 @@
-// +build windows
+//go:build windows
 
 package main
 
@@ -26,9 +26,11 @@ func main() {
 
 	options := initial.ParseOptions()
 
-	protocol.DecideType("raw", options.Downstream)
-
 	cli.Banner()
+
+	share.GeneratePreAuthToken(options.Secret)
+
+	protocol.SetUpDownStream("raw", options.Downstream)
 
 	topo := topology.NewTopology()
 	go topo.Run()
@@ -51,9 +53,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	admin := process.NewAdmin()
-
-	admin.Topology = topo
+	admin := process.NewAdmin(options, topo)
 
 	topoTask := &topology.TopoTask{
 		Mode: topology.CALCULATE,
