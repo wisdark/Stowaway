@@ -70,14 +70,14 @@ func (console *Console) start() {
 	helper := NewHelper()
 	go helper.Run()
 
+	fmt.Print(console.status)
 	// Tested on:
 	// Macos Catalina iterm2/original terminal
 	// Ubuntu desktop 16.04/18.04
 	// Ubuntu server 16.04
 	// Centos 7
 	// Win10 x64 Professional
-	// May have problems when the console working on some terminal since I'm using escape sequence,so if ur checking code after face this situation,let me know if possible
-	fmt.Print(console.status)
+	// May have problems when the console working on some terminal since I'm using escape sequence.
 	for {
 		event := termbox.PollEvent()
 		if event.Err != nil {
@@ -372,9 +372,16 @@ func (console *Console) start() {
 		} else if event.Key == termbox.KeyCtrlC {
 			// Ctrl+C?
 			if !console.shellMode && !console.sshMode {
-				printer.Warning("\r\n[*]Please use 'exit' to exit stowaway or use 'back' to return to parent panel")
+				printer.Warning("\r\n[*] Please use 'exit' to exit stowaway or use 'back' to return to parent panel")
 			} else {
-				printer.Warning("\r\n[*]Please use 'exit' to exit shell/sshmode")
+				printer.Warning("\r\n[*] Press 'Enter' to force quit shell/ssh mode, other keys to continue")
+				event := termbox.PollEvent()
+				if event.Key == termbox.KeyEnter {
+					console.mgr.ConsoleManager.Exit <- true
+					printer.Success("\r\n[*] Quit shell/ssh mode successfully, press 'Enter' to continue")
+				} else {
+					printer.Warning("\r\n[*] Continue shell/ssh mode, press 'Enter' to continue")
+				}
 			}
 		} else {
 			if !console.shellMode && !console.sshMode {
@@ -536,6 +543,13 @@ func (console *Console) handleNodePanelCommand(uuidNum int) {
 		fCommand := strings.Split(tCommand, " ")
 
 		switch fCommand[0] {
+		case "status":
+			if !console.isOnline(uuidNum) {
+				return
+			}
+
+			handler.ShowStatus(console.mgr, uuid)
+			console.ready <- true
 		case "addmemo":
 			if !console.isOnline(uuidNum) {
 				return
@@ -778,11 +792,7 @@ func (console *Console) handleNodePanelCommand(uuidNum int) {
 				socks.Password = fCommand[3]
 			}
 
-			if socks.Addr != "" {
-				printer.Warning("\r\n[*] Trying to listen on %s:%s......", socks.Addr, socks.Port)
-			} else {
-				printer.Warning("\r\n[*] Trying to listen on 0.0.0.0:%s......", socks.Port)
-			}
+			printer.Warning("\r\n[*] Trying to listen on %s:%s......", socks.Addr, socks.Port)
 
 			printer.Warning("\r\n[*] Waiting for agent's response......")
 
@@ -818,6 +828,8 @@ func (console *Console) handleNodePanelCommand(uuidNum int) {
 					printer.Fail("\r\n[*] Please input y/n!")
 				}
 				console.status = fmt.Sprintf("(node %d) >> ", uuidNum)
+			} else {
+				printer.Fail("\r\n[*] Socks service isn't running!")
 			}
 			console.ready <- true
 		case "forward":
@@ -875,6 +887,8 @@ func (console *Console) handleNodePanelCommand(uuidNum int) {
 					printer.Fail("\r\n[*] Please input y/n!")
 				}
 				console.status = fmt.Sprintf("(node %d) >> ", uuidNum)
+			} else {
+				printer.Fail("\r\n[*] Forward service isn't running!")
 			}
 			console.ready <- true
 		case "backward":
@@ -932,6 +946,8 @@ func (console *Console) handleNodePanelCommand(uuidNum int) {
 					printer.Fail("\r\n[*] Please input y/n!")
 				}
 				console.status = fmt.Sprintf("(node %d) >> ", uuidNum)
+			} else {
+				printer.Fail("\r\n[*] Backward service isn't running!")
 			}
 			console.ready <- true
 		case "upload":
